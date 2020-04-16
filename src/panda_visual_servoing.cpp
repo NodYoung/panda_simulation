@@ -6,6 +6,7 @@
 #include <sophus/se3.hpp>
 #include <math.h>
 #include <mutex>
+#include <atomic>
 
 // MoveIt!
 #include <moveit/robot_model_loader/robot_model_loader.h>
@@ -13,6 +14,62 @@
 #include <moveit/robot_state/robot_state.h>
 #include <moveit/move_group_interface/move_group_interface.h>
 #include <moveit/planning_scene_interface/planning_scene_interface.h>
+
+// visp
+#include <visp3/visual_features/vpFeatureBuilder.h>
+#include <visp3/vs/vpServo.h>
+#include <visp3/visual_features/vpFeatureThetaU.h>
+#include <visp3/visual_features/vpFeatureTranslation.h>
+#include <visp3/core/vpHomogeneousMatrix.h>
+
+class PBVS {
+public:
+    PBVS():s_t_(vpFeatureTranslation::cMo), s_tu_(vpFeatureThetaU::cdRc),
+                              s_star_t_(vpFeatureTranslation::cMo), s_star_tu_(vpFeatureThetaU::cdRc),
+                              v_c_(6) {}
+    ~PBVS() {task_.kill();}
+    void Init() {
+        cdMo_[0][0] = -1; cdMo_[0][1] = 0; cdMo_[0][2] =  0; cdMo_[0][3] = 0.1112315;
+        cdMo_[1][0] = 0; cdMo_[1][1] = -1; cdMo_[1][2] =  0; cdMo_[1][3] = 0.21367;
+        cdMo_[2][0] = 0; cdMo_[2][1] =  0; cdMo_[2][2] = 1; cdMo_[2][3] = 0.6;
+        s_star_t_.buildFrom(cdMo_);
+        task_.setServo(vpServo::EYEINHAND_CAMERA);    // Camera is monted on the robot end-effector and velocities are computed in the camera frame
+        task_.setInteractionMatrixType(vpServo::CURRENT);    // Interaction matrix is computed with the current visual features s
+        task_.setLambda(0.1);         // Set the contant 0.5
+        task_.addFeature(s_t_, s_star_t_);          // Add current and desired translation feature
+        task_.addFeature(s_tu_, s_star_tu_);           // Add current and desired ThetaU feature for the rotation
+    }
+    bool Calc(const Eigen::Transform<double, 3, Eigen::Isometry>& cMo, Eigen::Matrix<double, 6, 1>& cart_v) {
+        cMo_[0][0] = cMo(0, 0); cMo_[0][1] = cMo(0, 1); cMo_[0][2] = cMo(0, 2); cMo_[0][3] = cMo(0, 3);
+        cMo_[1][0] = cMo(1, 0); cMo_[1][1] = cMo(1, 1); cMo_[1][2] = cMo(1, 2); cMo_[1][3] = cMo(1, 3);
+        cMo_[2][0] = cMo(2, 0); cMo_[2][1] = cMo(2, 1); cMo_[2][2] = cMo(2, 2); cMo_[2][3] = cMo(2, 3);
+        cMo_[3][0] = cMo(3, 0); cMo_[3][1] = cMo(3, 1); cMo_[3][2] = cMo(3, 2); cMo_[3][3] = cMo(3, 3);
+        cdMc_ = cdMo_ * cMo_.inverse();
+        s_t_.buildFrom(cMo_);
+        s_tu_.buildFrom(cdMc_);
+        v_c_ = task_.computeControlLaw(); // Compute camera velocity skew
+        cart_v << v_c_[0], v_c_[1], v_c_[2], v_c_[3], v_c_[4], v_c_[5];
+        error_ = (task_.getError()).sumSquare(); // error = s^2 - s_star^2
+        ROS_INFO_STREAM("error_: " << error_);
+        if(error_ < 0.00001) {
+            return true;
+        }
+        return false;
+        // ROS_INFO_STREAM("error_: " << error_);
+    }
+private:
+    vpHomogeneousMatrix cdMc_;      //the displacement the camera has to achieve to move from the desired camera frame and the current one
+    vpHomogeneousMatrix cMo_;
+    vpHomogeneousMatrix oMo_;
+    vpHomogeneousMatrix cdMo_;
+    vpFeatureTranslation s_t_;     //the current visual feature s
+    vpFeatureThetaU s_tu_;
+    vpFeatureTranslation s_star_t_;      //the desired visual feature s*
+    vpFeatureThetaU s_star_tu_;
+    vpServo task_;         // the visual servo task
+    vpColVector v_c_;      // Camera velocity
+    double error_;         // Task error
+};
 
 class SE3Pid {
 public:
@@ -95,61 +152,6 @@ public:
         move_group_.setStartStateToCurrentState();
         move_group_.setJointValueTarget(joints);
         move_group_.move();
-        // kinematic_model_ = robot_model_loader_.getModel();
-        // kinematic_state_.reset(new robot_state::RobotState(kinematic_model_));
-        // kinematic_state_->getJacobian(kinematic_model_->getJointModelGroup("panda_arm"),
-        //                        kinematic_state_->getLinkModel(kinematic_model_->getJointModelGroup("panda_arm")->getLinkModelNames().back()),
-        //                        reference_point_position_, jacobian_);
-
-
-        // kinematic_state_ = move_group_.getCurrentState();
-        // kinematic_state_->getJacobian(kinematic_state_->getJointModelGroup("panda_arm"),
-        //                        kinematic_state_->getLinkModel(kinematic_state_->getJointModelGroup("panda_arm")->getLinkModelNames().back()),
-        //                        reference_point_position_, jacobian_);
-        // ROS_INFO_STREAM("Jacobian: \n" << jacobian_ << "\n");
-        // pose_msg_ = move_group_.getCurrentPose("panda_link8");
-        // pose_eg_ = Eigen::Transform<double, 3, Eigen::Isometry>::Identity();
-        // pose_eg_.rotate(Eigen::Quaterniond(pose_msg_.pose.orientation.w, pose_msg_.pose.orientation.x, pose_msg_.pose.orientation.y, pose_msg_.pose.orientation.z));
-        // pose_eg_.pretranslate(Eigen::Vector3d(pose_msg_.pose.position.x, pose_msg_.pose.position.y, pose_msg_.pose.position.z));
-        // ROS_INFO_STREAM("cur pose: " << pose_eg_.matrix());
-        // Eigen::Matrix<double, 6, 1> cart_v;
-        // cart_v << 0.01, 0, 0, 0, 0, 0;
-        // Eigen::Matrix<double, 7, 1> jnt_v = jacobian_.transpose() * (jacobian_ * jacobian_.transpose()).inverse() * cart_v;
-        // // Eigen::CompleteOrthogonalDecomposition<Eigen::MatrixXd> cqr(jacobian);
-        // // Eigen::Matrix<double, 7, 1> jnt_v = cqr.pseudoInverse() * cart_v;
-        // ROS_INFO_STREAM("jnt_v: \n" << jnt_v << "\n");
-        // std::vector<double> jnt = move_group_.getCurrentJointValues();
-        // for (int i=0; i<7; i++) {
-        //     jnt.at(i) += jnt_v(i, 0);
-        // }
-        // move_group_.setStartStateToCurrentState();
-        // move_group_.setJointValueTarget(jnt);
-        // move_group_.move();
-        // pose_msg_ = move_group_.getCurrentPose("panda_link8");
-        // pose_eg_ = Eigen::Transform<double, 3, Eigen::Isometry>::Identity();
-        // pose_eg_.rotate(Eigen::Quaterniond(pose_msg_.pose.orientation.w, pose_msg_.pose.orientation.x, pose_msg_.pose.orientation.y, pose_msg_.pose.orientation.z));
-        // pose_eg_.pretranslate(Eigen::Vector3d(pose_msg_.pose.position.x, pose_msg_.pose.position.y, pose_msg_.pose.position.z));
-        // ROS_INFO_STREAM("cur pose: " << pose_eg_.matrix());
-        // for (int i=0; i<10; i++) {
-        //     kinematic_state_ = move_group_.getCurrentState();
-        //     kinematic_state_->getJacobian(kinematic_state_->getJointModelGroup("panda_arm"),
-        //                        kinematic_state_->getLinkModel(kinematic_state_->getJointModelGroup("panda_arm")->getLinkModelNames().back()),
-        //                        reference_point_position_, jacobian_);
-        //     jnt_v = jacobian_.transpose() * (jacobian_ * jacobian_.transpose()).inverse() * cart_v;
-        //     jnt = move_group_.getCurrentJointValues();
-        //     for (int i=0; i<7; i++) {
-        //         jnt.at(i) += jnt_v(i, 0);
-        //     }
-        //     move_group_.setStartStateToCurrentState();
-        //     move_group_.setJointValueTarget(jnt);
-        //     move_group_.move();
-        //     pose_msg_ = move_group_.getCurrentPose("panda_link8");
-        //     pose_eg_ = Eigen::Transform<double, 3, Eigen::Isometry>::Identity();
-        //     pose_eg_.rotate(Eigen::Quaterniond(pose_msg_.pose.orientation.w, pose_msg_.pose.orientation.x, pose_msg_.pose.orientation.y, pose_msg_.pose.orientation.z));
-        //     pose_eg_.pretranslate(Eigen::Vector3d(pose_msg_.pose.position.x, pose_msg_.pose.position.y, pose_msg_.pose.position.z));
-        //     ROS_INFO_STREAM("cur pose: " << pose_eg_.matrix());
-        // }
-
     }
     ~Robot() {}
     Eigen::Transform<double, 3, Eigen::Isometry> bMe() {
@@ -164,7 +166,7 @@ public:
         kinematic_state_->getJacobian(kinematic_state_->getJointModelGroup("panda_arm"),
                                kinematic_state_->getLinkModel(kinematic_state_->getJointModelGroup("panda_arm")->getLinkModelNames().back()),
                                reference_point_position_, jacobian_);
-        return jacobian_;                       
+        return jacobian_;
     }
     bool Move(const Eigen::Matrix<double, 7, 1>& joint_v) {
         joint_position_ = move_group_.getCurrentJointValues();
@@ -179,8 +181,6 @@ private:
     ros::NodeHandle nh_;
     std::string planning_group_;
     moveit::planning_interface::MoveGroupInterface move_group_;
-    // robot_model_loader::RobotModelLoader robot_model_loader_;
-    // robot_model::RobotModelPtr kinematic_model_;
     robot_state::RobotStatePtr kinematic_state_;
     Eigen::Vector3d reference_point_position_;
     Eigen::MatrixXd jacobian_;
@@ -193,8 +193,6 @@ private:
 class VisualServoing {
 public:
     VisualServoing(ros::NodeHandle& nh):nh_(nh), robot_(nh) {
-
-        cMo_sub_ = nh_.subscribe("board/pose", 1, &VisualServoing::CalibPoseCallback, this);
         eMc_ = Eigen::Transform<double, 3, Eigen::Isometry>::Identity();
         Eigen::Matrix<double, 3, 3> rot;
         rot << 0.0, 1.0, 0.0,
@@ -224,33 +222,68 @@ public:
                 cVe_(i, j+3) = t_r(i, j);
             }
         }
+
+        pbvs_.Init();
+        cMo_sub_ = nh_.subscribe("board/pose", 1, &VisualServoing::CalibPoseCallback, this);
     }
     ~VisualServoing() {}
     void CalibPoseCallback(const geometry_msgs::PoseStamped& cMo_msg) {
-        std::unique_lock<std::mutex> locker(mutex_);
-        cMo_ = Eigen::Transform<double, 3, Eigen::Isometry>::Identity();
-        cMo_.rotate(Eigen::Quaterniond(cMo_msg.pose.orientation.w, cMo_msg.pose.orientation.x, cMo_msg.pose.orientation.y, cMo_msg.pose.orientation.z));
-        cMo_.pretranslate(Eigen::Vector3d(cMo_msg.pose.position.x, cMo_msg.pose.position.y, cMo_msg.pose.position.z));
-        // ROS_INFO_STREAM("cMo_: " << cMo_.matrix());
-        locker.unlock();
+        // std::unique_lock<std::mutex> locker(mutex_);
+        Eigen::Transform<double, 3, Eigen::Isometry> cMo = Eigen::Transform<double, 3, Eigen::Isometry>::Identity();
+        cMo.rotate(Eigen::Quaterniond(cMo_msg.pose.orientation.w, cMo_msg.pose.orientation.x, cMo_msg.pose.orientation.y, cMo_msg.pose.orientation.z));
+        cMo.pretranslate(Eigen::Vector3d(cMo_msg.pose.position.x, cMo_msg.pose.position.y, cMo_msg.pose.position.z));
+        // ROS_INFO_STREAM("cMo: " << cMo.matrix());
+        // locker.unlock();
+        mutex_.lock();
+        cMo_ = cMo;
+        mutex_.unlock();
+    }
+    void RunVisp() {
+        Eigen::Transform<double, 3, Eigen::Isometry> cMo;
+        mutex_.lock();
+        cMo = cMo_;
+        mutex_.unlock();
+        if (pbvs_.Calc(cMo, cart_v_)) {
+            ROS_INFO_STREAM("motion_finished");
+            return;
+        }
+        ROS_INFO_STREAM("pbvs_ cart_v_:" << cart_v_*10);
+        jacobian_ = robot_.jacobian();
+        Eigen::Matrix<double, 6, 1> cart_v;
+        cart_v << cart_v_(1, 0), cart_v_(0, 0), -cart_v_(2, 0), cart_v_(4, 0), cart_v_(3, 0), -cart_v_(5, 0);
+        cart_v << cart_v_(1, 0), cart_v_(0, 0), -cart_v_(2, 0), cart_v_(4, 0), cart_v_(3, 0), -cart_v_(5, 0);
+        Eigen::Matrix<double, 7, 1> q_dot = jacobian_.transpose() * (jacobian_ * jacobian_.transpose()).inverse() * cart_v;
+        robot_.Move(q_dot);
     }
     void Run() {
         bMe_ = robot_.bMe();
         bMc_ = bMe_ * eMc_;
-        std::unique_lock<std::mutex> locker(mutex_);
+        Eigen::Transform<double, 3, Eigen::Isometry> cMo;
+        // std::unique_lock<std::mutex> locker(mutex_);
+        mutex_.lock();
         bMcd_ = bMc_ * cMo_ * cdMo_.inverse();
-        locker.unlock();
-        ROS_INFO_STREAM("bMc_:" << bMc_.matrix());
-        ROS_INFO_STREAM("bMcd_:" << bMcd_.matrix());
-        bool motion_finished = pid_.Calc(bMc_, bMcd_, cart_v_);
-        if (motion_finished) {
-            ROS_INFO_STREAM("motion_finished");
-            return;
-        }
+        cMo = cMo_;
+        mutex_.unlock();
+        // locker.unlock();
+        // ROS_INFO_STREAM("bMc_:" << bMc_.matrix());
+        // ROS_INFO_STREAM("bMcd_:" << bMcd_.matrix());
+        // bool motion_finished = pid_.Calc(bMc_, bMcd_, cart_v_);
+        // ROS_INFO_STREAM("pid_ cart_v_:" << cart_v_);
+        pbvs_.Calc(cMo, cart_v_);
+        ROS_INFO_STREAM("pbvs_ cart_v_:" << cart_v_*10);
+        
+        // if (motion_finished) {
+        //     ROS_INFO_STREAM("motion_finished");
+        //     return;
+        // }
         jacobian_ = robot_.jacobian();
-        Eigen::Matrix<double, 6, 7> jv = cVe_ * jacobian_;
-        Eigen::Matrix<double, 7, 1> q_dot = jv.transpose() * (jv * jv.transpose()).inverse() * cart_v_;
-        // ROS_INFO_STREAM("q_dot: " << q_dot);
+        // Eigen::Matrix<double, 6, 7> jv = cVe_ * jacobian_;
+        // Eigen::Matrix<double, 7, 1> q_dot = jv.transpose() * (jv * jv.transpose()).inverse() * cart_v_;
+        Eigen::Matrix<double, 6, 1> cart_v;
+        // cart_v << 0, 0, -cart_v_(2, 0), 0, 0, 0;
+        cart_v << cart_v_(1, 0), cart_v_(0, 0), -cart_v_(2, 0), cart_v_(4, 0), cart_v_(3, 0), -cart_v_(5, 0);
+        Eigen::Matrix<double, 7, 1> q_dot = jacobian_.transpose() * (jacobian_ * jacobian_.transpose()).inverse() * cart_v;
+        ROS_INFO_STREAM("q_dot: " << q_dot);
         robot_.Move(q_dot);
     }
 private:
@@ -258,11 +291,13 @@ private:
     ros::Subscriber cMo_sub_;
     Robot robot_;
     SE3Pid pid_;
+    PBVS pbvs_;
     Eigen::Transform<double, 3, Eigen::Isometry> bMe_;
     Eigen::Transform<double, 3, Eigen::Isometry> bMc_;
     Eigen::Transform<double, 3, Eigen::Isometry> eMc_;
     Eigen::Transform<double, 3, Eigen::Isometry> bMcd_;
     Eigen::Transform<double, 3, Eigen::Isometry> cdMo_;
+    // std::atomic<Eigen::Transform<double, 3, Eigen::Isometry>> cMo_;
     Eigen::Transform<double, 3, Eigen::Isometry> cMo_;
     Eigen::Matrix<double, 6, 1> cart_v_;
     Eigen::MatrixXd jacobian_;
@@ -273,15 +308,15 @@ private:
 int main(int argc, char** argv) {
     ros::init(argc, argv, "panda_visual_servoing");
     ros::NodeHandle nh;
-    ros::AsyncSpinner spinner(1);
+    ros::AsyncSpinner spinner(4);
     spinner.start();
     ROS_INFO("hello panda_visual_servoing");
 
     VisualServoing vs(nh);
     while(1) {
-        vs.Run();
+        vs.RunVisp();
     }
 
-    ros::waitForShutdown();
+    // ros::waitForShutdown();
     return 0;
 }

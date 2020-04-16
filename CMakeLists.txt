@@ -44,6 +44,11 @@ find_package(Sophus REQUIRED)
 include_directories(${Sophus_INCLUDE_DIRS})
 message (STATUS "Sophus_INCLUDE_DIRS: ${Sophus_INCLUDE_DIRS}")
 
+#visp
+find_package(VISP REQUIRED)
+include_directories(${VISP_INCLUDE_DIRS})
+message (STATUS "VISP_INCLUDE_DIRS: ${VISP_INCLUDE_DIRS}")
+
 # ################################################################################################################################
 # catkin specific configuration ##
 # ################################################################################################################################
@@ -73,7 +78,7 @@ add_executable(panda_visual_servoing_node src/panda_visual_servoing.cpp)
 target_link_libraries(robot_control_node ${catkin_LIBRARIES} boost_filesystem ${JSONCPP_LIBRARIES})
 target_link_libraries(box_publisher_node ${catkin_LIBRARIES})
 target_link_libraries(robot_state_initializer_node ${catkin_LIBRARIES})
-target_link_libraries(panda_visual_servoing_node ${catkin_LIBRARIES})
+target_link_libraries(panda_visual_servoing_node ${catkin_LIBRARIES} ${VISP_LIBRARIES})
 
 # add custom controller as library
 add_library(${PROJECT_NAME}_controllers_lib src/joint_position_controller.cpp)

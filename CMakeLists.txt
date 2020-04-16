@@ -34,6 +34,16 @@ find_package(PkgConfig REQUIRED)
 pkg_check_modules(JSONCPP jsoncpp)
 message(${JSONCPP_LIBRARIES})
 
+#eigen
+find_package(Eigen3 REQUIRED)
+include_directories(${EIGEN3_INCLUDE_DIRS})
+message (STATUS "EIGEN3_INCLUDE_DIRS: ${EIGEN3_INCLUDE_DIRS}")
+
+#sophus
+find_package(Sophus REQUIRED)
+include_directories(${Sophus_INCLUDE_DIRS})
+message (STATUS "Sophus_INCLUDE_DIRS: ${Sophus_INCLUDE_DIRS}")
+
 # ################################################################################################################################
 # catkin specific configuration ##
 # ################################################################################################################################
@@ -58,10 +68,12 @@ include_directories(${catkin_INCLUDE_DIRS})
 add_executable(robot_control_node src/robot_control_node.cpp)
 add_executable(box_publisher_node src/box_publisher.cpp)
 add_executable(robot_state_initializer_node src/robot_state_initializer.cpp)
+add_executable(panda_visual_servoing_node src/panda_visual_servoing.cpp)
 
 target_link_libraries(robot_control_node ${catkin_LIBRARIES} boost_filesystem ${JSONCPP_LIBRARIES})
 target_link_libraries(box_publisher_node ${catkin_LIBRARIES})
 target_link_libraries(robot_state_initializer_node ${catkin_LIBRARIES})
+target_link_libraries(panda_visual_servoing_node ${catkin_LIBRARIES})
 
 # add custom controller as library
 add_library(${PROJECT_NAME}_controllers_lib src/joint_position_controller.cpp)

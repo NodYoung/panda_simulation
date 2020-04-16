@@ -1,3 +1,4 @@
+#panda:                    #useful if you use a namespace for the robot
     # Publish joint states
     joint_state_controller:
         type: joint_state_controller/JointStateController
@@ -26,6 +27,7 @@
             - panda_finger_joint2
 
         state_publish_rate: 25
+
     joint_position_controller:
         type: panda_simulation/JointPositionController
         arm_id: panda

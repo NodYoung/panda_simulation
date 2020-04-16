@@ -75,63 +75,48 @@ class SE3Pid {
 public:
     SE3Pid():kp_(0.01), ki_(0.0), kd_(0.0), dt_(1), max_(0.1), integral_(Eigen::Matrix<double, 6, 1>::Zero()), pre_error_(Eigen::Matrix<double, 6, 1>::Zero()) {}
     ~SE3Pid() {}
-    bool Init(const float& kp, const float& ki, const float& kd) {
-        kp_ = kp;
-        ki_ = ki;
-        kd_ = kd;
+    bool Init() {
+        cdMo_ = Eigen::Transform<double, 3, Eigen::Isometry>::Identity();
+        Eigen::Matrix<double, 3, 3> rot;
+        rot << -1.0, 0.0, 0.0,
+                0.0, -1.0, 0.0,
+                0.0, 0.0, 1.0;
+        cdMo_.rotate(Eigen::Quaterniond(rot));
+        cdMo_.pretranslate(Eigen::Vector3d(0.1112315, 0.21367, 0.6));
+        cdMo_se3_ = Sophus::SE3d(Eigen::Quaterniond(cdMo_.matrix().block<3, 3>(0, 0)), Eigen::Vector3d(cdMo_.matrix().block<3, 1>(0, 3)));
     }
-    bool Calc(const Eigen::Transform<double, 3, Eigen::Isometry>& pose_cur, const Eigen::Transform<double, 3, Eigen::Isometry>& pose_goal,
-              Eigen::Transform<double, 3, Eigen::Isometry>& pose_delta)  {
-        Sophus::SE3d se_goal = Sophus::SE3d(Eigen::Quaterniond(pose_goal.matrix().block<3, 3>(0, 0)), Eigen::Vector3d(pose_goal.matrix().block<3, 1>(0, 3)));
-        Sophus::SE3d se_cur(Eigen::Quaterniond(pose_cur.matrix().block<3, 3>(0, 0)), Eigen::Vector3d(pose_cur.matrix().block<3, 1>(0, 3)));
-        Eigen::Matrix<double, 6, 1> error = (se_cur.inverse() * se_goal).log();
-        if (error.norm() < 1e-6) {
-            return true;
-        }
-        // Proportional term
-        Eigen::Matrix<double, 6, 1> p_out = kp_ * error;
-        // Integral term
-        integral_ += error * dt_;
-        Eigen::Matrix<double, 6, 1> i_out = ki_ * integral_;
-        // Derivative term
-        Eigen::Matrix<double, 6, 1> derivative = (error - pre_error_) / dt_;
-        Eigen::Matrix<double, 6, 1> d_out = kd_ * derivative;
-        // Calculate total output
-        Eigen::Matrix<double, 6, 1> diff = p_out + i_out + d_out;
-        if (diff.norm() > max_) {
-            ROS_INFO("pid is too large");
-            diff = diff * max_/diff.norm();
-        }
-        Sophus::SE3d se_i = se_cur * Sophus::SE3d::exp(diff);
-        pose_delta = se_i.matrix();
-        pre_error_ = error;
+    bool Calc(const Eigen::Transform<double, 3, Eigen::Isometry>& cMo, Eigen::Transform<double, 3, Eigen::Isometry>& pose)  {
+        Sophus::SE3d cMo_se3(Eigen::Quaterniond(cMo.matrix().block<3, 3>(0, 0)), Eigen::Vector3d(cMo.matrix().block<3, 1>(0, 3)));
+        Eigen::Matrix<double, 6, 1> error = (cMo_se3.inverse() * cdMo_se3_).log();
+        Eigen::Matrix<double, 6, 1> diff = 0.1*error;
+        Sophus::SE3d se_i = cMo_se3 * Sophus::SE3d::exp(diff);
+        pose = se_i.matrix();
         return false;
     }
-    bool Calc(const Eigen::Transform<double, 3, Eigen::Isometry>& pose_cur, const Eigen::Transform<double, 3, Eigen::Isometry>& pose_goal,
-              Eigen::Matrix<double, 6, 1>& cart_v)  {
-        Sophus::SE3d se_goal = Sophus::SE3d(Eigen::Quaterniond(pose_goal.matrix().block<3, 3>(0, 0)), Eigen::Vector3d(pose_goal.matrix().block<3, 1>(0, 3)));
-        Sophus::SE3d se_cur(Eigen::Quaterniond(pose_cur.matrix().block<3, 3>(0, 0)), Eigen::Vector3d(pose_cur.matrix().block<3, 1>(0, 3)));
-        Eigen::Matrix<double, 6, 1> error = (se_cur.inverse() * se_goal).log();
-        if (error.norm() < 1e-6) {
-            return true;
-        }
-        // Proportional term
-        Eigen::Matrix<double, 6, 1> p_out = kp_ * error;
-        // Integral term
-        integral_ += error * dt_;
-        Eigen::Matrix<double, 6, 1> i_out = ki_ * integral_;
-        // Derivative term
-        Eigen::Matrix<double, 6, 1> derivative = (error - pre_error_) / dt_;
-        Eigen::Matrix<double, 6, 1> d_out = kd_ * derivative;
-        // Calculate total output
-        Eigen::Matrix<double, 6, 1> diff = p_out + i_out + d_out;
-        if (diff.norm() > max_) {
-            ROS_INFO_STREAM("pid is too large: " << diff);
-            diff = diff * max_/diff.norm();
-        }
-        cart_v = diff;
-        pre_error_ = error;
-        return false;
+    bool Calc(const Eigen::Transform<double, 3, Eigen::Isometry>& cMo, Eigen::Matrix<double, 6, 1>& cart_v)  {
+        Sophus::SE3d cMo_se3(Eigen::Quaterniond(cMo.matrix().block<3, 3>(0, 0)), Eigen::Vector3d(cMo.matrix().block<3, 1>(0, 3)));
+        Eigen::Matrix<double, 6, 1> error = (cMo_se3.inverse() * cdMo_se3_).log();
+        cart_v = 0.1*error;
+        // if (error.norm() < 1e-6) {
+        //     return true;
+        // }
+        // // Proportional term
+        // Eigen::Matrix<double, 6, 1> p_out = kp_ * error;
+        // // Integral term
+        // integral_ += error * dt_;
+        // Eigen::Matrix<double, 6, 1> i_out = ki_ * integral_;
+        // // Derivative term
+        // Eigen::Matrix<double, 6, 1> derivative = (error - pre_error_) / dt_;
+        // Eigen::Matrix<double, 6, 1> d_out = kd_ * derivative;
+        // // Calculate total output
+        // Eigen::Matrix<double, 6, 1> diff = p_out + i_out + d_out;
+        // if (diff.norm() > max_) {
+        //     ROS_INFO_STREAM("pid is too large: " << diff);
+        //     diff = diff * max_/diff.norm();
+        // }
+        // cart_v = diff;
+        // pre_error_ = error;
+        // return false;
     }
 private:
     float kp_;
@@ -141,6 +126,8 @@ private:
     float max_;
     Eigen::Matrix<double, 6, 1> pre_error_;
     Eigen::Matrix<double, 6, 1> integral_;
+    Eigen::Transform<double, 3, Eigen::Isometry> cdMo_;
+    Sophus::SE3d cdMo_se3_;
 };
 
 class Robot {
@@ -224,6 +211,7 @@ public:
         }
 
         pbvs_.Init();
+        pid_.Init();
         cMo_sub_ = nh_.subscribe("board/pose", 1, &VisualServoing::CalibPoseCallback, this);
     }
     ~VisualServoing() {}
@@ -250,40 +238,23 @@ public:
         ROS_INFO_STREAM("pbvs_ cart_v_:" << cart_v_*10);
         jacobian_ = robot_.jacobian();
         Eigen::Matrix<double, 6, 1> cart_v;
-        cart_v << cart_v_(1, 0), cart_v_(0, 0), -cart_v_(2, 0), cart_v_(4, 0), cart_v_(3, 0), -cart_v_(5, 0);
+        // cart_v << cart_v_(1, 0), cart_v_(0, 0), -cart_v_(2, 0), cart_v_(4, 0), cart_v_(3, 0), -cart_v_(5, 0);
         cart_v << cart_v_(1, 0), cart_v_(0, 0), -cart_v_(2, 0), cart_v_(4, 0), cart_v_(3, 0), -cart_v_(5, 0);
         Eigen::Matrix<double, 7, 1> q_dot = jacobian_.transpose() * (jacobian_ * jacobian_.transpose()).inverse() * cart_v;
-        robot_.Move(q_dot);
+        // robot_.Move(q_dot);
     }
-    void Run() {
-        bMe_ = robot_.bMe();
-        bMc_ = bMe_ * eMc_;
+    void RunPid() {
         Eigen::Transform<double, 3, Eigen::Isometry> cMo;
-        // std::unique_lock<std::mutex> locker(mutex_);
         mutex_.lock();
-        bMcd_ = bMc_ * cMo_ * cdMo_.inverse();
         cMo = cMo_;
         mutex_.unlock();
-        // locker.unlock();
-        // ROS_INFO_STREAM("bMc_:" << bMc_.matrix());
-        // ROS_INFO_STREAM("bMcd_:" << bMcd_.matrix());
-        // bool motion_finished = pid_.Calc(bMc_, bMcd_, cart_v_);
-        // ROS_INFO_STREAM("pid_ cart_v_:" << cart_v_);
-        pbvs_.Calc(cMo, cart_v_);
-        ROS_INFO_STREAM("pbvs_ cart_v_:" << cart_v_*10);
-        
-        // if (motion_finished) {
-        //     ROS_INFO_STREAM("motion_finished");
-        //     return;
-        // }
+        pid_.Calc(cMo, cart_v_);
+        ROS_INFO_STREAM("pid_ cart_v_:" << cart_v_*10);
         jacobian_ = robot_.jacobian();
-        // Eigen::Matrix<double, 6, 7> jv = cVe_ * jacobian_;
-        // Eigen::Matrix<double, 7, 1> q_dot = jv.transpose() * (jv * jv.transpose()).inverse() * cart_v_;
         Eigen::Matrix<double, 6, 1> cart_v;
-        // cart_v << 0, 0, -cart_v_(2, 0), 0, 0, 0;
-        cart_v << cart_v_(1, 0), cart_v_(0, 0), -cart_v_(2, 0), cart_v_(4, 0), cart_v_(3, 0), -cart_v_(5, 0);
+        cart_v << cart_v_(1, 0), cart_v_(0, 0), cart_v_(2, 0), cart_v_(4, 0), cart_v_(3, 0), cart_v_(5, 0);
+        // sleep(1);
         Eigen::Matrix<double, 7, 1> q_dot = jacobian_.transpose() * (jacobian_ * jacobian_.transpose()).inverse() * cart_v;
-        ROS_INFO_STREAM("q_dot: " << q_dot);
         robot_.Move(q_dot);
     }
 private:
@@ -314,7 +285,8 @@ int main(int argc, char** argv) {
 
     VisualServoing vs(nh);
     while(1) {
-        vs.RunVisp();
+        // vs.RunVisp();
+        vs.RunPid();
     }
 
     // ros::waitForShutdown();

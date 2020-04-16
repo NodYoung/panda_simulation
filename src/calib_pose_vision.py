@@ -86,7 +86,6 @@ class CalibPoseVision:
         self.image_sub = rospy.Subscriber('panda/camera/image_raw', Image, self.image_callback)
         self.image_pub = rospy.Publisher('panda/camera/image_post', Image, queue_size=1)
 
-
     def image_callback(self, msg):
         start_time = time.time()
         image = self.bridge.imgmsg_to_cv2(msg, desired_encoding='bgr8')

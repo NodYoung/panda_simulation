@@ -50,7 +50,7 @@ public:
         v_c_ = task_.computeControlLaw(); // Compute camera velocity skew
         cart_v << v_c_[0], v_c_[1], v_c_[2], v_c_[3], v_c_[4], v_c_[5];
         error_ = (task_.getError()).sumSquare(); // error = s^2 - s_star^2
-        ROS_INFO_STREAM("error_: " << error_);
+        // ROS_INFO_STREAM("error_: " << error_);
         if(error_ < 0.00001) {
             return true;
         }
@@ -84,6 +84,7 @@ public:
         cdMo_.rotate(Eigen::Quaterniond(rot));
         cdMo_.pretranslate(Eigen::Vector3d(0.1112315, 0.21367, 0.6));
         cdMo_se3_ = Sophus::SE3d(Eigen::Quaterniond(cdMo_.matrix().block<3, 3>(0, 0)), Eigen::Vector3d(cdMo_.matrix().block<3, 1>(0, 3)));
+        oMcd_se3_ = Sophus::SE3d(Eigen::Quaterniond(cdMo_.inverse().matrix().block<3, 3>(0, 0)), Eigen::Vector3d(cdMo_.inverse().matrix().block<3, 1>(0, 3)));
     }
     bool Calc(const Eigen::Transform<double, 3, Eigen::Isometry>& cMo, Eigen::Transform<double, 3, Eigen::Isometry>& pose)  {
         Sophus::SE3d cMo_se3(Eigen::Quaterniond(cMo.matrix().block<3, 3>(0, 0)), Eigen::Vector3d(cMo.matrix().block<3, 1>(0, 3)));
@@ -96,7 +97,9 @@ public:
     bool Calc(const Eigen::Transform<double, 3, Eigen::Isometry>& cMo, Eigen::Matrix<double, 6, 1>& cart_v)  {
         Sophus::SE3d cMo_se3(Eigen::Quaterniond(cMo.matrix().block<3, 3>(0, 0)), Eigen::Vector3d(cMo.matrix().block<3, 1>(0, 3)));
         Eigen::Matrix<double, 6, 1> error = (cMo_se3.inverse() * cdMo_se3_).log();
-        cart_v = 0.1*error;
+        Eigen::Matrix<double, 6, 1> delta = 0.1*error;
+        // ROS_INFO_STREAM("delta: " << delta);
+        cart_v = delta;
         // if (error.norm() < 1e-6) {
         //     return true;
         // }
@@ -118,6 +121,13 @@ public:
         // pre_error_ = error;
         // return false;
     }
+    bool Calc2o(const Eigen::Transform<double, 3, Eigen::Isometry>& cMo, Eigen::Matrix<double, 6, 1>& cart_v)  {
+        Sophus::SE3d oMc_se3(Eigen::Quaterniond(cMo.inverse().matrix().block<3, 3>(0, 0)), Eigen::Vector3d(cMo.inverse().matrix().block<3, 1>(0, 3)));
+        Eigen::Matrix<double, 6, 1> error = (oMc_se3.inverse() * oMcd_se3_).log();
+        Eigen::Matrix<double, 6, 1> delta = 0.1*error;
+        // ROS_INFO_STREAM("delta: " << delta);
+        cart_v = delta;
+    }
 private:
     float kp_;
     float ki_;
@@ -128,6 +138,7 @@ private:
     Eigen::Matrix<double, 6, 1> integral_;
     Eigen::Transform<double, 3, Eigen::Isometry> cdMo_;
     Sophus::SE3d cdMo_se3_;
+    Sophus::SE3d oMcd_se3_;
 };
 
 class Robot {
@@ -148,12 +159,17 @@ public:
         pose.pretranslate(Eigen::Vector3d(pose_msg.pose.position.x, pose_msg.pose.position.y, pose_msg.pose.position.z));
         return pose;
     }
+    // Eigen::MatrixXd jacobian() {
+    //     kinematic_state_ = move_group_.getCurrentState();
+    //     kinematic_state_->getJacobian(kinematic_state_->getJointModelGroup("panda_arm"),
+    //                            kinematic_state_->getLinkModel(kinematic_state_->getJointModelGroup("panda_arm")->getLinkModelNames().back()),
+    //                            reference_point_position_, jacobian_);
+    //     return jacobian_;
+    // }
     Eigen::MatrixXd jacobian() {
         kinematic_state_ = move_group_.getCurrentState();
-        kinematic_state_->getJacobian(kinematic_state_->getJointModelGroup("panda_arm"),
-                               kinematic_state_->getLinkModel(kinematic_state_->getJointModelGroup("panda_arm")->getLinkModelNames().back()),
-                               reference_point_position_, jacobian_);
-        return jacobian_;
+        // ROS_INFO_STREAM(kinematic_state_->getJointModelGroup("panda_arm")->getLinkModelNames().back());
+        return kinematic_state_->getJacobian(kinematic_state_->getJointModelGroup("panda_arm"));
     }
     bool Move(const Eigen::Matrix<double, 7, 1>& joint_v) {
         joint_position_ = move_group_.getCurrentJointValues();
@@ -162,6 +178,11 @@ public:
         }
         move_group_.setStartStateToCurrentState();
         move_group_.setJointValueTarget(joint_position_);
+        move_group_.move();
+    }
+    bool Move(const Eigen::Transform<double, 3, Eigen::Isometry>& pose) {
+        move_group_.setStartStateToCurrentState();
+        move_group_.setPoseTarget(pose);
         move_group_.move();
     }
 private:
@@ -253,8 +274,63 @@ public:
         jacobian_ = robot_.jacobian();
         Eigen::Matrix<double, 6, 1> cart_v;
         cart_v << cart_v_(1, 0), cart_v_(0, 0), cart_v_(2, 0), cart_v_(4, 0), cart_v_(3, 0), cart_v_(5, 0);
-        // sleep(1);
+        sleep(1);
         Eigen::Matrix<double, 7, 1> q_dot = jacobian_.transpose() * (jacobian_ * jacobian_.transpose()).inverse() * cart_v;
+        // robot_.Move(q_dot);
+    }
+    void RunPid2o() {
+        jacobian_ = robot_.jacobian();
+        Eigen::Matrix<double, 3, 3> eRb = robot_.bMe().inverse().matrix().block<3, 3>(0, 0);
+        Eigen::Matrix<double, 6, 6> eVb = Eigen::Matrix<double, 6, 6>::Zero();
+        for(int i=0; i<3; i++) {
+            for (int j = 0; j < 3; j++) {
+                eVb(i, j) = eRb(i, j);
+                eVb(i+3, j+3) = eRb(i, j);
+            }
+        }
+        Eigen::MatrixXd eJe = eVb * jacobian_;
+        Eigen::Transform<double, 3, Eigen::Isometry> cMo;
+        mutex_.lock();
+        cMo = cMo_;
+        mutex_.unlock();
+        pid_.Calc2o(cMo, cart_v_);
+        ROS_INFO_STREAM("pid_ Calc2o cart_v_:" << cart_v_*10);
+        // pid_.Calc(cMo, cart_v_);
+        // ROS_INFO_STREAM("pid_ Calc cart_v_:" << cart_v_*10);
+        // pbvs_.Calc(cMo, cart_v_);
+        // ROS_INFO_STREAM("pbvs_ Calc cart_v_:" << cart_v_*10);
+        Eigen::Matrix<double, 6, 1> cart_v;
+        cart_v << cart_v_(1, 0), -cart_v_(0, 0), cart_v_(2, 0), cart_v_(4, 0), -cart_v_(3, 0), cart_v_(5, 0);
+        // sleep(1);
+        Eigen::Matrix<double, 7, 1> q_dot = eJe.transpose() * (eJe * eJe.transpose()).inverse() * cart_v;
+        robot_.Move(q_dot);
+    }
+    void RunPidPose() {
+        Eigen::Transform<double, 3, Eigen::Isometry> cMo;
+        mutex_.lock();
+        cMo = cMo_;
+        mutex_.unlock();
+        Eigen::Transform<double, 3, Eigen::Isometry> cMo_next;
+        pid_.Calc(cMo, cMo_next);
+        Eigen::Transform<double, 3, Eigen::Isometry> bMo = robot_.bMe() * eMc_ * cMo;
+        Eigen::Transform<double, 3, Eigen::Isometry> bMe_next = bMo * cMo_next.inverse()*eMc_.inverse();
+        robot_.Move(bMe_next);
+    }
+    void Run() {
+        jacobian_ = robot_.jacobian();
+        Eigen::Matrix<double, 3, 3> eRb = robot_.bMe().inverse().matrix().block<3, 3>(0, 0);
+        Eigen::Matrix<double, 6, 6> eVb = Eigen::Matrix<double, 6, 6>::Zero();
+        for(int i=0; i<3; i++) {
+            for (int j = 0; j < 3; j++) {
+                eVb(i, j) = eRb(i, j);
+                eVb(i+3, j+3) = eRb(i, j);
+            }
+        }
+        Eigen::MatrixXd eJe = eVb * jacobian_;
+        Eigen::Matrix<double, 6, 1> cart_v;
+        cart_v << 0, 0.01, 0, 0, 0, 0;
+        sleep(1);
+        Eigen::Matrix<double, 7, 1> q_dot = eJe.transpose() * (eJe * eJe.transpose()).inverse() * cart_v;
         robot_.Move(q_dot);
     }
 private:
@@ -286,7 +362,10 @@ int main(int argc, char** argv) {
     VisualServoing vs(nh);
     while(1) {
         // vs.RunVisp();
-        vs.RunPid();
+        // vs.RunPid();
+        vs.RunPid2o();
+        // vs.RunPidPose();
+        // vs.Run();
     }
 
     // ros::waitForShutdown();

@@ -207,7 +207,8 @@ public:
                 -1.0, 0.0, 0.0,
                 0.0, 0.0, 1.0;
         eMc_.rotate(Eigen::Quaterniond(rot));
-        eMc_.pretranslate(Eigen::Vector3d(0.0, 0.0, 0.02));        
+        eMc_.pretranslate(Eigen::Vector3d(0.0, 0.0, 0.02));
+
         cdMo_ = Eigen::Transform<double, 3, Eigen::Isometry>::Identity();
         rot << -1.0, 0.0, 0.0,
                 0.0, -1.0, 0.0,
@@ -302,7 +303,7 @@ public:
         Eigen::Matrix<double, 6, 1> cart_v;
         cart_v << cart_v_(1, 0), -cart_v_(0, 0), cart_v_(2, 0), cart_v_(4, 0), -cart_v_(3, 0), cart_v_(5, 0);
         // sleep(1);
-        Eigen::Matrix<double, 7, 1> q_dot = eJe.transpose() * (eJe * eJe.transpose()).inverse() * cart_v;
+        Eigen::Matrix<double, 7, 1> q_dot = eJe.transpose() * (eJe * eJe.transpose()).inverse() * cVe_.inverse() * cart_v_;
         robot_.Move(q_dot);
     }
     void RunPidPose() {
@@ -328,9 +329,9 @@ public:
         }
         Eigen::MatrixXd eJe = eVb * jacobian_;
         Eigen::Matrix<double, 6, 1> cart_v;
-        cart_v << 0, 0.01, 0, 0, 0, 0;
+        cart_v << 0, 0, 0, 0.01, 0.01, 0;
         sleep(1);
-        Eigen::Matrix<double, 7, 1> q_dot = eJe.transpose() * (eJe * eJe.transpose()).inverse() * cart_v;
+        Eigen::Matrix<double, 7, 1> q_dot = eJe.transpose() * (eJe * eJe.transpose()).inverse() * cVe_.inverse() * cart_v;
         robot_.Move(q_dot);
     }
 private:
